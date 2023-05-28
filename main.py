@@ -12,6 +12,14 @@ Content-length: 15
 
 <h1>Hello!</h1>""".replace(b"\n", b"\r\n")
 
+# “400 Bad Request” response when we get a malformed request
+BAD_REQUEST_RESPONSE = b"""\
+HTTP/1.1 400 Bad Request
+Content-type: text/plain
+Content-length: 11
+
+Bad Request""".replace(b"\n", b"\r\n")
+
 
 def iter_lines(sock: socket.socket, bufsize: int = 16_384) -> typing.Generator[bytes, None, bytes]:
     """Given a socket, read all the individual CRLF-separated lines
@@ -93,8 +101,12 @@ with socket.socket() as server_sock:
         print(f"New connection from {client_addr}.")
 
         with client_sock:
-            # get the request from the client
-            request = Request.from_socket(client_sock)
-            print(request)
-            # send pre-defined response to the client
-            client_sock.sendall(RESPONSE)
+            try:
+                # get the request from the client
+                request = Request.from_socket(client_sock)
+                print(request)
+                # send pre-defined response to the client
+                client_sock.sendall(RESPONSE)
+            except Exception as e:
+                print(f"Failed to parse request: {e}")
+                client_sock.sendall(BAD_REQUEST_RESPONSE)
