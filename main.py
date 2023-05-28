@@ -1,9 +1,8 @@
-import io
 import mimetypes
 import os
 import socket
-import typing
-from collections import defaultdict
+
+from request import Request
 
 # Where the server should serve files from
 SERVER_ROOT = os.path.abspath("www")
@@ -44,30 +43,6 @@ Content-length: 9
 Not Found""".replace(b"\n", b"\r\n")
 
 
-def iter_lines(sock: socket.socket, bufsize: int = 16_384) -> typing.Generator[bytes, None, bytes]:
-    """Given a socket, read all the individual CRLF-separated lines
-    and yield each one until an empty one is found.  Returns the
-    remainder after the empty line.
-    """
-    buff = b""
-    while True:
-        data = sock.recv(bufsize)
-        if not data:
-            return b""
-
-        buff += data
-        while True:
-            try:
-                i = buff.index(b"\r\n")
-                line, buff = buff[:i], buff[i + 2:]
-                if not line:
-                    return buff
-
-                yield line
-            except IndexError:
-                break
-
-
 def serve_file(sock: socket.socket, path: str) -> None:
     """Given a socket and the relative path to a file (relative to
     SERVER_SOCK), send that file to the socket if it exists.  If the
@@ -101,90 +76,6 @@ def serve_file(sock: socket.socket, path: str) -> None:
     except FileNotFoundError:
         sock.sendall(NOT_FOUND_RESPONSE)
         return
-
-
-class Headers:
-    def __init__(self) -> None:
-        self._headers = defaultdict(list)
-
-    def add(self, name: str, value: str) -> None:
-        self._headers[name.lower()].append(value)
-
-    def get_all(self, name: str) -> typing.List[str]:
-        return self._headers[name.lower()]
-
-    def get(self, name: str, default: typing.Optional[str] = None) -> typing.Optional[str]:
-        try:
-            return self.get_all(name)[-1]
-        except IndexError:
-            return default
-
-
-class BodyReader(io.IOBase):
-    def __init__(self, sock: socket.socket, *, buff: bytes = b"", bufsize: int = 16_384) -> None:
-        self._sock = sock
-        self._buff = buff
-        self._bufsize = bufsize
-
-    def readable(self) -> bool:
-        return True
-
-    def read(self, n: int) -> bytes:
-        """Read up to n number of bytes from the request body.
-        """
-        while len(self._buff) < n:
-            data = self._sock.recv(self._bufsize)
-            if not data:
-                break
-
-            self._buff += data
-
-        res, self._buff = self._buff[:n], self._buff[n:]
-        return res
-
-
-class Request(typing.NamedTuple):
-    method: str
-    path: str
-    headers: Headers
-    body: BodyReader
-
-    @classmethod
-    def from_socket(cls, sock: socket.socket) -> "Request":
-        """Read and parse the request from a socket object.
-
-        Raises:
-          ValueError: When the request cannot be parsed.
-        """
-        lines = iter_lines(sock)
-
-        try:
-            request_line = next(lines).decode("ascii")
-        except StopIteration:
-            raise ValueError("Request line missing.")
-
-        try:
-            method, path, _ = request_line.split(" ")
-        except ValueError:
-            raise ValueError(f"Malformed request line {request_line!r}.")
-
-        headers = Headers()
-        buff = b""
-        while True:
-            try:
-                line = next(lines)
-            except StopIteration as e:
-                # StopIteration.value contains the return value of the generator.
-                buff = e.value
-                break
-
-            try:
-                name, _, value = line.decode("ascii").partition(":")
-                headers.add(name, value.lstrip())
-            except ValueError:
-                raise ValueError(f"Malformed header line {line!r}.")
-        body = BodyReader(sock, buff=buff)
-        return cls(method=method.upper(), path=path, headers=headers, body=body)
 
 
 # By default, socket.socket creates TCP sockets.
