@@ -2,6 +2,7 @@ import mimetypes
 import os
 import socket
 import typing
+from collections import defaultdict
 
 # Where the server should serve files from
 SERVER_ROOT = os.path.abspath("www")
@@ -101,10 +102,27 @@ def serve_file(sock: socket.socket, path: str) -> None:
         return
 
 
+class Headers:
+    def __init__(self) -> None:
+        self._headers = defaultdict(list)
+
+    def add(self, name: str, value: str) -> None:
+        self._headers[name.lower()].append(value)
+
+    def get_all(self, name: str) -> typing.List[str]:
+        return self._headers[name.lower()]
+
+    def get(self, name: str, default: typing.Optional[str] = None) -> typing.Optional[str]:
+        try:
+            return self.get_all(name)[-1]
+        except IndexError:
+            return default
+
+
 class Request(typing.NamedTuple):
     method: str
     path: str
-    headers: typing.Mapping[str, str]
+    headers: Headers
 
     @classmethod
     def from_socket(cls, sock: socket.socket) -> "Request":
@@ -125,11 +143,11 @@ class Request(typing.NamedTuple):
         except ValueError:
             raise ValueError(f"Malformed request line {request_line!r}.")
 
-        headers = {}
+        headers = Headers()
         for line in lines:
             try:
                 name, _, value = line.decode("ascii").partition(":")
-                headers[name.lower()] = value.lstrip()
+                headers.add(name, value.lstrip())
             except ValueError:
                 raise ValueError(f"Malformed header line {line!r}.")
 
