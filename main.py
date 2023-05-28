@@ -1,16 +1,29 @@
+import mimetypes
+import os
 import socket
 import typing
+
+# Where the server should serve files from
+SERVER_ROOT = os.path.abspath("www")
 
 HOST = "127.0.0.1"
 PORT = 9000
 
-# a static response to serve to clients
-RESPONSE = b"""\
+# Template string used by serve_file()
+FILE_RESPONSE_TEMPLATE = """\
 HTTP/1.1 200 OK
-Content-type: text/html
-Content-length: 15
+Content-type: {content_type}
+Content-length: {content_length}
 
-<h1>Hello!</h1>""".replace(b"\n", b"\r\n")
+""".replace("\n", "\r\n")
+
+# If a method other than GET is received
+METHOD_NOT_ALLOWED_RESPONSE = b"""\
+HTTP/1.1 405 Method Not Allowed
+Content-type: text/plain
+Content-length: 17
+
+Method Not Allowed""".replace(b"\n", b"\r\n")
 
 # “400 Bad Request” response when we get a malformed request
 BAD_REQUEST_RESPONSE = b"""\
@@ -19,6 +32,14 @@ Content-type: text/plain
 Content-length: 11
 
 Bad Request""".replace(b"\n", b"\r\n")
+
+# "404 Not Found" response
+NOT_FOUND_RESPONSE = b"""\
+HTTP/1.1 404 Not Found
+Content-type: text/plain
+Content-length: 9
+
+Not Found""".replace(b"\n", b"\r\n")
 
 
 def iter_lines(sock: socket.socket, bufsize: int = 16_384) -> typing.Generator[bytes, None, bytes]:
@@ -43,6 +64,41 @@ def iter_lines(sock: socket.socket, bufsize: int = 16_384) -> typing.Generator[b
                 yield line
             except IndexError:
                 break
+
+
+def serve_file(sock: socket.socket, path: str) -> None:
+    """Given a socket and the relative path to a file (relative to
+    SERVER_SOCK), send that file to the socket if it exists.  If the
+    file doesn't exist, send a "404 Not Found" response.
+    """
+    if path == "/":
+        path = "/index.html"
+
+    abspath = os.path.normpath(os.path.join(SERVER_ROOT, path.lstrip("/")))
+    if not abspath.startswith(SERVER_ROOT):
+        sock.sendall(NOT_FOUND_RESPONSE)
+        return
+
+    try:
+        with open(abspath, "rb") as f:
+            stat = os.fstat(f.fileno())
+            content_type, encoding = mimetypes.guess_type(abspath)
+            if content_type is None:
+                content_type = "application/octet-stream"
+
+            if encoding is not None:
+                content_type += f"; charset={encoding}"
+
+            response_headers = FILE_RESPONSE_TEMPLATE.format(
+                content_type=content_type,
+                content_length=stat.st_size,
+            ).encode("ascii")
+
+            sock.sendall(response_headers)
+            sock.sendfile(f)
+    except FileNotFoundError:
+        sock.sendall(NOT_FOUND_RESPONSE)
+        return
 
 
 class Request(typing.NamedTuple):
@@ -105,8 +161,15 @@ with socket.socket() as server_sock:
                 # get the request from the client
                 request = Request.from_socket(client_sock)
                 print(request)
-                # send pre-defined response to the client
-                client_sock.sendall(RESPONSE)
+
+                # only allow GET requests
+                if request.method != "GET":
+                    client_sock.sendall(METHOD_NOT_ALLOWED_RESPONSE)
+                    continue
+
+                # find and serve the file
+                serve_file(client_sock, request.path)
+
             except Exception as e:
                 print(f"Failed to parse request: {e}")
                 client_sock.sendall(BAD_REQUEST_RESPONSE)
