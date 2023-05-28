@@ -3,44 +3,13 @@ import os
 import socket
 
 from request import Request
+from response import Response
 
 # Where the server should serve files from
 SERVER_ROOT = os.path.abspath("www")
 
 HOST = "127.0.0.1"
 PORT = 9000
-
-# Template string used by serve_file()
-FILE_RESPONSE_TEMPLATE = """\
-HTTP/1.1 200 OK
-Content-type: {content_type}
-Content-length: {content_length}
-
-""".replace("\n", "\r\n")
-
-# If a method other than GET is received
-METHOD_NOT_ALLOWED_RESPONSE = b"""\
-HTTP/1.1 405 Method Not Allowed
-Content-type: text/plain
-Content-length: 17
-
-Method Not Allowed""".replace(b"\n", b"\r\n")
-
-# “400 Bad Request” response when we get a malformed request
-BAD_REQUEST_RESPONSE = b"""\
-HTTP/1.1 400 Bad Request
-Content-type: text/plain
-Content-length: 11
-
-Bad Request""".replace(b"\n", b"\r\n")
-
-# "404 Not Found" response
-NOT_FOUND_RESPONSE = b"""\
-HTTP/1.1 404 Not Found
-Content-type: text/plain
-Content-length: 9
-
-Not Found""".replace(b"\n", b"\r\n")
 
 
 def serve_file(sock: socket.socket, path: str) -> None:
@@ -53,7 +22,8 @@ def serve_file(sock: socket.socket, path: str) -> None:
 
     abspath = os.path.normpath(os.path.join(SERVER_ROOT, path.lstrip("/")))
     if not abspath.startswith(SERVER_ROOT):
-        sock.sendall(NOT_FOUND_RESPONSE)
+        response = Response(status="404 Not Found", content="Not Found")
+        response.send(sock)
         return
 
     try:
@@ -66,15 +36,14 @@ def serve_file(sock: socket.socket, path: str) -> None:
             if encoding is not None:
                 content_type += f"; charset={encoding}"
 
-            response_headers = FILE_RESPONSE_TEMPLATE.format(
-                content_type=content_type,
-                content_length=stat.st_size,
-            ).encode("ascii")
+            response = Response(status="200 OK", body=f)
+            response.headers.add("content-type", content_type)
+            response.send(sock)
+            return
 
-            sock.sendall(response_headers)
-            sock.sendfile(f)
     except FileNotFoundError:
-        sock.sendall(NOT_FOUND_RESPONSE)
+        response = Response(status="404 Not Found", content="Not Found")
+        response.send(sock)
         return
 
 
@@ -121,7 +90,8 @@ with socket.socket() as server_sock:
 
                 # only allow GET requests
                 if request.method != "GET":
-                    client_sock.sendall(METHOD_NOT_ALLOWED_RESPONSE)
+                    response = Response(status="405 Method Not Allowed", content="Method Not Allowed")
+                    response.send(client_sock)
                     continue
 
                 # find and serve the file
@@ -129,4 +99,5 @@ with socket.socket() as server_sock:
 
             except Exception as e:
                 print(f"Failed to parse request: {e}")
-                client_sock.sendall(BAD_REQUEST_RESPONSE)
+                response = Response(status="400 Bad Request", content="Bad Request")
+                response.send(client_sock)
