@@ -104,6 +104,10 @@ with socket.socket() as server_sock:
                 request = Request.from_socket(client_sock)
                 print(request)
 
+                # respond to 100-continue status codes for large request bodies
+                if "100-continue" in request.headers.get("expect", ""):
+                    client_sock.sendall(b"HTTP/1.1 100 Continue\r\n\r\n")
+
                 # get content length header and ensure > 0
                 try:
                     content_length = int(request.headers.get("content-length", "0"))
