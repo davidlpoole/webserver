@@ -1,3 +1,4 @@
+import io
 import mimetypes
 import os
 import socket
@@ -119,10 +120,34 @@ class Headers:
             return default
 
 
+class BodyReader(io.IOBase):
+    def __init__(self, sock: socket.socket, *, buff: bytes = b"", bufsize: int = 16_384) -> None:
+        self._sock = sock
+        self._buff = buff
+        self._bufsize = bufsize
+
+    def readable(self) -> bool:
+        return True
+
+    def read(self, n: int) -> bytes:
+        """Read up to n number of bytes from the request body.
+        """
+        while len(self._buff) < n:
+            data = self._sock.recv(self._bufsize)
+            if not data:
+                break
+
+            self._buff += data
+
+        res, self._buff = self._buff[:n], self._buff[n:]
+        return res
+
+
 class Request(typing.NamedTuple):
     method: str
     path: str
     headers: Headers
+    body: BodyReader
 
     @classmethod
     def from_socket(cls, sock: socket.socket) -> "Request":
@@ -144,14 +169,22 @@ class Request(typing.NamedTuple):
             raise ValueError(f"Malformed request line {request_line!r}.")
 
         headers = Headers()
-        for line in lines:
+        buff = b""
+        while True:
+            try:
+                line = next(lines)
+            except StopIteration as e:
+                # StopIteration.value contains the return value of the generator.
+                buff = e.value
+                break
+
             try:
                 name, _, value = line.decode("ascii").partition(":")
                 headers.add(name, value.lstrip())
             except ValueError:
                 raise ValueError(f"Malformed header line {line!r}.")
-
-        return cls(method=method.upper(), path=path, headers=headers)
+        body = BodyReader(sock, buff=buff)
+        return cls(method=method.upper(), path=path, headers=headers, body=body)
 
 
 # By default, socket.socket creates TCP sockets.
@@ -179,6 +212,17 @@ with socket.socket() as server_sock:
                 # get the request from the client
                 request = Request.from_socket(client_sock)
                 print(request)
+
+                # get content length header and ensure > 0
+                try:
+                    content_length = int(request.headers.get("content-length", "0"))
+                except ValueError:
+                    content_length = 0
+
+                # read body content if content length > 0
+                if content_length:
+                    body = request.body.read(content_length)
+                    print("Request body", body)
 
                 # only allow GET requests
                 if request.method != "GET":
